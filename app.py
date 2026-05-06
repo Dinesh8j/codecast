@@ -207,17 +207,28 @@ def scala_enum(fn, vals, pkg):
     L.append( '  }'); L.append('}')
     return {"filename":f"{cn}.scala","description":f"Sealed trait · {', '.join(vals)}","code":"\n".join(L)}
 
-def scala_case_class(cn, fields, nested_map, pkg, enum_reg):
+def scala_case_class(cn, fields, nested_map, pkg, enum_reg, option_fields=None):
     L=[]
     if pkg: L.append(f"package {pkg}\n")
     L.append("import play.api.libs.json._\n")
+    option_fields = set(option_fields or [])
     fd=[]
     for fn,fv in fields.items():
-        if fn in nested_map:      ft=nested_map[fn]
-        elif fn in enum_reg:      ft=enum_reg[fn]
-        elif fv is None:          ft="Option[String]"
-        elif isinstance(fv,dict): ft=to_class_name(fn)
-        else:                     ft=infer_scala_type(fv)
+        if fn in nested_map:
+            base_ft = nested_map[fn]
+            ft = f"Option[{base_ft}]" if fn in option_fields else base_ft
+        elif fn in enum_reg:
+            base_ft = enum_reg[fn]
+            ft = f"Option[{base_ft}]" if fn in option_fields else base_ft
+        elif fv is None:
+            ft = "Option[String]"
+        elif isinstance(fv, dict):
+            base_ft = to_class_name(fn)
+            ft = f"Option[{base_ft}]" if fn in option_fields else base_ft
+        else:
+            ft = infer_scala_type(fv)
+            if fn in option_fields and not ft.startswith("Option["):
+                ft = f"Option[{ft}]"
         fd.append((fn,ft))
     L.append(f"case class {cn}(")
     for i,(fn,ft) in enumerate(fd):
@@ -240,7 +251,7 @@ def scala_case_class(cn, fields, nested_map, pkg, enum_reg):
     L.append("    )\n  }\n}")
     return {"filename":f"{cn}.scala","description":"Case class · explicit reads/writes","code":"\n".join(L)}
 
-def generate_scala(raw, root, pkg, extra_enums):
+def generate_scala(raw, root, pkg, extra_enums, option_fields=None):
     clean, comment_enums = strip_comments(raw)
     data = json.loads(clean)
     all_enums = {**comment_enums, **extra_enums}
@@ -257,7 +268,7 @@ def generate_scala(raw, root, pkg, extra_enums):
                 nn=to_class_name(k); nm[k]=f"Seq[{nn}]"; classes.extend(collect(v[0],nn))
         classes.append((name,obj,nm)); return classes
     for cn,fields,nm in collect(data,root):
-        files.append(scala_case_class(cn,fields,nm,pkg,enum_reg))
+        files.append(scala_case_class(cn,fields,nm,pkg,enum_reg,option_fields))
     return files
 
 # ── Python ────────────────────────────────────────────────────────────────────
@@ -272,19 +283,30 @@ def python_enum(fn, vals):
         f'            raise ValueError(f"Unknown {cn}: {{value}}. Allowed: {{allowed}}")']
     return {"filename":f"{cn}.py","description":f"Enum · {', '.join(vals)}","code":"\n".join(L)}
 
-def python_dataclass(cn, fields, nested_map, enum_reg):
-    imports={"from dataclasses import dataclass, field","from typing import Optional, List"}
+def python_dataclass(cn, fields, nested_map, enum_reg, option_fields=None):
+    option_fields = set(option_fields or [])
+    imports ={"from dataclasses import dataclass, field","from typing import Optional, List"}
     for v in enum_reg.values(): imports.add(f"from {v} import {v}")
     for nn in set(nested_map.values()):
         base=nn.replace("List[","").replace("]",""); imports.add(f"from {base} import {base}")
     L=list(sorted(imports))+["","","@dataclass",f"class {cn}:"]
     fd=[]
     for fname,fv in fields.items():
-        if fname in nested_map:      ft=nested_map[fname]
-        elif fname in enum_reg:      ft=enum_reg[fname]
-        elif fv is None:             ft="Optional[str]"
-        elif isinstance(fv,dict):    ft=to_class_name(fname)
-        else:                        ft=infer_python_type(fv)
+        if fname in nested_map:
+            base_ft = nested_map[fname]
+            ft = f"Optional[{base_ft}]" if fname in option_fields else base_ft
+        elif fname in enum_reg:
+            base_ft = enum_reg[fname]
+            ft = f"Optional[{base_ft}]" if fname in option_fields else base_ft
+        elif fv is None:
+            ft = "Optional[str]"
+        elif isinstance(fv, dict):
+            base_ft = to_class_name(fname)
+            ft = f"Optional[{base_ft}]" if fname in option_fields else base_ft
+        else:
+            ft = infer_python_type(fv)
+            if fname in option_fields and not ft.startswith("Optional["):
+                ft = f"Optional[{ft}]"
         fd.append((fname,ft,fv))
         if "List" in ft or "list" in ft: L.append(f"    {fname}: {ft} = field(default_factory=list)")
         else:                            L.append(f"    {fname}: {ft} = None")
@@ -292,15 +314,24 @@ def python_dataclass(cn, fields, nested_map, enum_reg):
         "        return cls("]
     for i,(fname,ft,fv) in enumerate(fd):
         comma="," if i<len(fd)-1 else ""
+        is_opt = ft.startswith("Optional[")
         if fname in enum_reg:
-            L.append(f'            {fname}={enum_reg[fname]}.from_str(data["{fname}"]){comma}')
+            ecn = enum_reg[fname]
+            if is_opt:
+                L.append(f'            {fname}={ecn}.from_str(data["{fname}"]) if data.get("{fname}") is not None else None{comma}')
+            else:
+                L.append(f'            {fname}={ecn}.from_str(data["{fname}"]){comma}')
         elif fname in nested_map:
             raw=nested_map[fname]
             if "List" in raw:
                 inner=raw.replace("List[","").replace("]","")
                 L.append(f'            {fname}=[{inner}.from_dict(i) for i in data.get("{fname}",[])]{comma}')
             else:
-                L.append(f'            {fname}={raw}.from_dict(data["{fname}"]){comma}')
+                if is_opt:
+                    inner = ft[9:-1]  # strip Optional[...]
+                    L.append(f'            {fname}={inner}.from_dict(data["{fname}"]) if data.get("{fname}") is not None else None{comma}')
+                else:
+                    L.append(f'            {fname}={raw}.from_dict(data["{fname}"]){comma}')
         else:
             L.append(f'            {fname}=data.get("{fname}"){comma}')
     L+=["        )","","    def to_dict(self) -> dict:","        result = {}"]
@@ -315,7 +346,7 @@ def python_dataclass(cn, fields, nested_map, enum_reg):
     L.append("        return result")
     return {"filename":f"{cn}.py","description":"Dataclass · from_dict/to_dict","code":"\n".join(L)}
 
-def generate_python(raw, root, extra_enums):
+def generate_python(raw, root, extra_enums, option_fields=None):
     clean, comment_enums = strip_comments(raw)
     data = json.loads(clean)
     all_enums = {**comment_enums, **extra_enums}
@@ -332,7 +363,7 @@ def generate_python(raw, root, extra_enums):
                 nn=to_class_name(k); nm[k]=f"List[{nn}]"; classes.extend(collect(v[0],nn))
         classes.append((name,obj,nm)); return classes
     for cn,fields,nm in collect(data,root):
-        files.append(python_dataclass(cn,fields,nm,enum_reg))
+        files.append(python_dataclass(cn,fields,nm,enum_reg,option_fields))
     return files
 
 def build_zip(files, root_name):
@@ -401,7 +432,11 @@ if st.session_state["active_tab"] == "generator":
         enum_raw = st.text_area("Enums", value="trigger_type: CREATE,RETRAIN,REFRESH",
                                 height=110, label_visibility="collapsed")
         st.markdown("---")
-        db_mode = "☁️ Supabase" if _use_supabase() else "💾 Local SQLite"
+        st.subheader("🔲 Option Fields")
+        st.caption("Field names to mark as optional — one per line")
+        option_raw = st.text_area("Options", value="quota_id",
+                                  height=90, label_visibility="collapsed")
+        st.markdown("---")
         st.caption(f"Storage: {db_mode}")
 
     col_in, col_out, col_fb = st.columns([1, 1.1, 0.8], gap="large")
@@ -417,6 +452,7 @@ if st.session_state["active_tab"] == "generator":
                     fn,vs=line.split(":",1)
                     vals=[v.strip() for v in vs.split(",") if v.strip()]
                     if fn.strip() and vals: extra_enums[fn.strip()]=vals
+            option_fields=[f.strip() for f in option_raw.strip().splitlines() if f.strip()]
             try:
                 cl,_=strip_comments(json_input); json.loads(cl)
             except json.JSONDecodeError as e:
@@ -425,9 +461,9 @@ if st.session_state["active_tab"] == "generator":
                 st.error("❌ Enter a root class name."); st.stop()
             try:
                 if lang=="Scala":
-                    files=generate_scala(json_input, root_class.strip(), package_name.strip(), extra_enums)
+                    files=generate_scala(json_input, root_class.strip(), package_name.strip(), extra_enums, option_fields)
                 else:
-                    files=generate_python(json_input, root_class.strip(), extra_enums)
+                    files=generate_python(json_input, root_class.strip(), extra_enums, option_fields)
                 st.session_state["files"]=files
                 st.session_state["json_used"]=json_input
                 log_generate(lang)
