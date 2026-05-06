@@ -616,7 +616,7 @@ elif st.session_state["active_tab"] == "admin":
 st.markdown("---")
 st.markdown("""
     <div style="text-align:center;color:gray;font-size:13px;padding:6px 0">
-        For custom requirements, feature requests or enterprise integrations — reach out directly:<br>
+        For custom requirements, feature requests or incorrect output — reach out directly:<br>
         <a href="mailto:dinesh.jr@zohocorp.com" style="color:#4F8BF9;text-decoration:none;">
             📧 dinesh.jr@zohocorp.com
         </a>
