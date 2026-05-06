@@ -284,13 +284,12 @@ def python_enum(fn, vals):
     return {"filename":f"{cn}.py","description":f"Enum · {', '.join(vals)}","code":"\n".join(L)}
 
 def python_dataclass(cn, fields, nested_map, enum_reg, option_fields=None):
-    option_fields = set(option_fields or [])
-    imports={"from dataclasses import dataclass, field","from typing import Optional, List"}
     imports={"from dataclasses import dataclass, field","from typing import Optional, List"}
     for v in enum_reg.values(): imports.add(f"from {v} import {v}")
     for nn in set(nested_map.values()):
         base=nn.replace("List[","").replace("]",""); imports.add(f"from {base} import {base}")
     L=list(sorted(imports))+["","","@dataclass",f"class {cn}:"]
+    option_fields = set(option_fields or [])
     fd=[]
     for fname,fv in fields.items():
         if fname in nested_map:
@@ -328,7 +327,7 @@ def python_dataclass(cn, fields, nested_map, enum_reg, option_fields=None):
                 inner=raw.replace("List[","").replace("]","")
                 L.append(f'            {fname}=[{inner}.from_dict(i) for i in data.get("{fname}",[])]{comma}')
             elif is_opt:
-                inner=ft[9:-1]  # strip Optional[...]
+                inner=ft[9:-1]
                 L.append(f'            {fname}={inner}.from_dict(data["{fname}"]) if data.get("{fname}") is not None else None{comma}')
             else:
                 L.append(f'            {fname}={raw}.from_dict(data["{fname}"]){comma}')
@@ -424,17 +423,21 @@ if st.session_state["active_tab"] == "generator":
             st.session_state.pop("files",None); st.rerun()
         lang=st.session_state["language"]
         st.markdown("---")
-        root_class   = st.text_input("Root class name", value="BusinessPatternCreateInputRequest")
-        package_name = st.text_input("Package name (optional)", value="com.zoho.crm.forecast") if lang=="Scala" else ""
+        root_class   = st.text_input("Root class name *", value="",
+                                     placeholder="e.g. MyRequest  (required)")
+        package_name = st.text_input("Package name (optional)", value="",
+                                     placeholder="e.g. com.example.myapp") if lang=="Scala" else ""
         st.markdown("---")
         st.subheader("🔤 Enum Fields")
         st.caption("One per line — `fieldName: VAL1,VAL2`")
-        enum_raw = st.text_area("Enums", value="trigger_type: CREATE,RETRAIN,REFRESH",
+        enum_raw = st.text_area("Enums", value="",
+                                placeholder="e.g.\ntrigger_type: CREATE,UPDATE,DELETE",
                                 height=110, label_visibility="collapsed")
         st.markdown("---")
         st.subheader("🔲 Option Fields")
         st.caption("Field names to mark as optional — one per line")
-        option_raw = st.text_area("Options", value="quota_id",
+        option_raw = st.text_area("Options", value="",
+                                  placeholder="e.g.\nquota_id\nclient_details",
                                   height=90, label_visibility="collapsed")
         st.markdown("---")
         db_mode = "☁️ Supabase" if _use_supabase() else "💾 Local SQLite"
@@ -459,7 +462,7 @@ if st.session_state["active_tab"] == "generator":
             except json.JSONDecodeError as e:
                 st.error(f"❌ Invalid JSON: {e}"); st.stop()
             if not root_class.strip():
-                st.error("❌ Enter a root class name."); st.stop()
+                st.error("❌ Root class name is required."); st.stop()
             try:
                 if lang=="Scala":
                     files=generate_scala(json_input, root_class.strip(), package_name.strip(), extra_enums, option_fields)
