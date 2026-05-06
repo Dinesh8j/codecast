@@ -556,11 +556,18 @@ elif st.session_state["active_tab"] == "admin":
 
     st.markdown("---")
     import csv, io as sio
-    buf=sio.StringIO()
-    writer=csv.DictWriter(buf, fieldnames=["id","category","message","language","status","created_at"])
-    writer.writeheader(); writer.writerows(fetch_feedbacks())
-    st.download_button("⬇️ Export CSV", buf.getvalue(),
-                       file_name="codecast_feedbacks.csv", mime="text/csv")
+    all_rows = fetch_feedbacks()
+    if all_rows:
+        buf = sio.StringIO()
+        # auto-detect fieldnames from actual data — works with both SQLite and Supabase
+        fieldnames = list(all_rows[0].keys())
+        writer = csv.DictWriter(buf, fieldnames=fieldnames, extrasaction="ignore")
+        writer.writeheader()
+        writer.writerows(all_rows)
+        st.download_button("⬇️ Export CSV", buf.getvalue(),
+                           file_name="codecast_feedbacks.csv", mime="text/csv")
+    else:
+        st.caption("No feedback to export yet.")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Footer
