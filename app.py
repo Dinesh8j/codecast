@@ -285,7 +285,8 @@ def python_enum(fn, vals):
 
 def python_dataclass(cn, fields, nested_map, enum_reg, option_fields=None):
     option_fields = set(option_fields or [])
-    imports ={"from dataclasses import dataclass, field","from typing import Optional, List"}
+    imports={"from dataclasses import dataclass, field","from typing import Optional, List"}
+    imports={"from dataclasses import dataclass, field","from typing import Optional, List"}
     for v in enum_reg.values(): imports.add(f"from {v} import {v}")
     for nn in set(nested_map.values()):
         base=nn.replace("List[","").replace("]",""); imports.add(f"from {base} import {base}")
@@ -326,12 +327,11 @@ def python_dataclass(cn, fields, nested_map, enum_reg, option_fields=None):
             if "List" in raw:
                 inner=raw.replace("List[","").replace("]","")
                 L.append(f'            {fname}=[{inner}.from_dict(i) for i in data.get("{fname}",[])]{comma}')
+            elif is_opt:
+                inner=ft[9:-1]  # strip Optional[...]
+                L.append(f'            {fname}={inner}.from_dict(data["{fname}"]) if data.get("{fname}") is not None else None{comma}')
             else:
-                if is_opt:
-                    inner = ft[9:-1]  # strip Optional[...]
-                    L.append(f'            {fname}={inner}.from_dict(data["{fname}"]) if data.get("{fname}") is not None else None{comma}')
-                else:
-                    L.append(f'            {fname}={raw}.from_dict(data["{fname}"]){comma}')
+                L.append(f'            {fname}={raw}.from_dict(data["{fname}"]){comma}')
         else:
             L.append(f'            {fname}=data.get("{fname}"){comma}')
     L+=["        )","","    def to_dict(self) -> dict:","        result = {}"]
@@ -437,6 +437,7 @@ if st.session_state["active_tab"] == "generator":
         option_raw = st.text_area("Options", value="quota_id",
                                   height=90, label_visibility="collapsed")
         st.markdown("---")
+        db_mode = "☁️ Supabase" if _use_supabase() else "💾 Local SQLite"
         st.caption(f"Storage: {db_mode}")
 
     col_in, col_out, col_fb = st.columns([1, 1.1, 0.8], gap="large")
