@@ -501,7 +501,7 @@ if st.session_state["active_tab"] == "generator":
     with col_fb:
         st.subheader("💬 Feedback")
         fb_cat = st.selectbox("Category",
-                              ["Incorrect output","Missing feature","Wrong type inference",
+                              ["Incorrect output","Missing feature","Option field not detected",
                                "Enum not detected","Other"],
                               label_visibility="collapsed")
         fb_msg = st.text_area("Message",
