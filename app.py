@@ -424,9 +424,9 @@ if st.session_state["active_tab"] == "generator":
         lang=st.session_state["language"]
         st.markdown("---")
         root_class   = st.text_input("Root class name *", value="",
-                                     placeholder="e.g. MyRequest  (required)")
+                                     placeholder="e.g. InsightsInputRequest  (required)")
         package_name = st.text_input("Package name (optional)", value="",
-                                     placeholder="e.g. com.example.myapp") if lang=="Scala" else ""
+                                     placeholder="e.g. com.zoho.feature.forecast") if lang=="Scala" else ""
         st.markdown("---")
         st.subheader("🔤 Enum Fields")
         st.caption("One per line — `fieldName: VAL1,VAL2`")
