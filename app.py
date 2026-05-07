@@ -517,7 +517,7 @@ if st.session_state["active_tab"] == "generator":
         st.subheader("🏷️ Default Values")
         st.caption("One per line — `fieldName = value`")
         defaults_raw = st.text_area("Defaults", value="",
-                                    placeholder="e.g.\nstatus = ACTIVE\nretries = 3\nname = \"guest\"",
+                                    placeholder="e.g.\nstatus = SCHEDULED\nfeature_name = \"Insights\"",
                                     height=100, label_visibility="collapsed")
         st.markdown("---")
         db_mode = "☁️ Supabase" if _use_supabase() else "💾 Local SQLite"
