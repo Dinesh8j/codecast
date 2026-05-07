@@ -170,6 +170,24 @@ def strip_comments(raw):
         clean.append(line)
     return "\n".join(clean), hints
 
+
+def parse_defaults(raw):
+    """Parse default values from sidebar text.
+    Format per line:  fieldName = defaultValue
+    The value is stored as a raw string; rendering decides quoting.
+    Returns: { fieldName: "rawValue" }
+    """
+    result = {}
+    for line in raw.strip().splitlines():
+        line = line.strip()
+        if "=" not in line:
+            continue
+        fname, val = line.split("=", 1)
+        fname, val = fname.strip(), val.strip()
+        if fname and val:
+            result[fname] = val
+    return result
+
 def infer_scala_type(v):
     if isinstance(v,bool):  return "Boolean"
     if isinstance(v,int):   return "Long" if abs(v)>2_147_483_647 else "Int"
@@ -190,6 +208,34 @@ def infer_python_type(v):
 
 # ── Scala ─────────────────────────────────────────────────────────────────────
 
+
+def scala_default_expr(ft, raw_val):
+    """Turn a raw sidebar string into a Scala default expression."""
+    raw = raw_val.strip()
+    # None / null
+    if raw.lower() in ("none", "null"):
+        return "None"
+    # Already quoted string literal
+    if raw.startswith('"') and raw.endswith('"'):
+        return raw
+    # Numeric literals — pass through as-is
+    if re.match(r'^-?\d+(\.\d+)?[lLfFdD]?$', raw):
+        return raw
+    # Boolean
+    if raw.lower() in ("true", "false"):
+        return raw.lower()
+    # Option[...] wrap a string value
+    if ft.startswith("Option["):
+        inner = ft[7:-1]
+        if inner == "String":
+            return f'Some("{raw}")'
+        return f'Some({raw})'
+    # Plain String field → quote it
+    if ft == "String":
+        return f'"{raw}"'
+    # Everything else (Int, Long, Double, Boolean, enum, nested) → raw
+    return raw
+
 def scala_enum(fn, vals, pkg):
     cn=to_class_name(fn); L=[]
     if pkg: L.append(f"package {pkg}\n")
@@ -207,11 +253,12 @@ def scala_enum(fn, vals, pkg):
     L.append( '  }'); L.append('}')
     return {"filename":f"{cn}.scala","description":f"Sealed trait · {', '.join(vals)}","code":"\n".join(L)}
 
-def scala_case_class(cn, fields, nested_map, pkg, enum_reg, option_fields=None):
+def scala_case_class(cn, fields, nested_map, pkg, enum_reg, option_fields=None, defaults=None):
     L=[]
     if pkg: L.append(f"package {pkg}\n")
     L.append("import play.api.libs.json._\n")
     option_fields = set(option_fields or [])
+    defaults      = defaults or {}
     fd=[]
     for fn,fv in fields.items():
         if fn in nested_map:
@@ -232,7 +279,13 @@ def scala_case_class(cn, fields, nested_map, pkg, enum_reg, option_fields=None):
         fd.append((fn,ft))
     L.append(f"case class {cn}(")
     for i,(fn,ft) in enumerate(fd):
-        L.append(f"  {fn}: {ft}{',' if i<len(fd)-1 else ''}")
+        default_str = ""
+        if fn in defaults:
+            default_str = f" = {scala_default_expr(ft, defaults[fn])}"
+        elif ft.startswith("Option["):
+            default_str = " = None"
+        comma = "," if i < len(fd)-1 else ""
+        L.append(f"  {fn}: {ft}{default_str}{comma}")
     L.append(")\n")
     L.append(f"object {cn} {{")
     L.append(f"  implicit val FORMAT: Format[{cn}] = new Format[{cn}] {{\n")
@@ -242,6 +295,9 @@ def scala_case_class(cn, fields, nested_map, pkg, enum_reg, option_fields=None):
         comma="," if i<len(fd)-1 else ""
         if ft.startswith("Option["):
             L.append(f'        {fn} = (json \\ "{fn}").asOpt[{ft[7:-1]}]{comma}')
+        elif fn in defaults:
+            dexpr = scala_default_expr(ft, defaults[fn])
+            L.append(f'        {fn} = (json \\ "{fn}").asOpt[{ft}].getOrElse({dexpr}){comma}')
         else:
             L.append(f'        {fn} = (json \\ "{fn}").as[{ft}]{comma}')
     L.append("      )\n      JsSuccess(result)\n    }\n")
@@ -251,7 +307,7 @@ def scala_case_class(cn, fields, nested_map, pkg, enum_reg, option_fields=None):
     L.append("    )\n  }\n}")
     return {"filename":f"{cn}.scala","description":"Case class · explicit reads/writes","code":"\n".join(L)}
 
-def generate_scala(raw, root, pkg, extra_enums, option_fields=None):
+def generate_scala(raw, root, pkg, extra_enums, option_fields=None, defaults=None):
     clean, comment_enums = strip_comments(raw)
     data = json.loads(clean)
     all_enums = {**comment_enums, **extra_enums}
@@ -268,10 +324,26 @@ def generate_scala(raw, root, pkg, extra_enums, option_fields=None):
                 nn=to_class_name(k); nm[k]=f"Seq[{nn}]"; classes.extend(collect(v[0],nn))
         classes.append((name,obj,nm)); return classes
     for cn,fields,nm in collect(data,root):
-        files.append(scala_case_class(cn,fields,nm,pkg,enum_reg,option_fields))
+        files.append(scala_case_class(cn,fields,nm,pkg,enum_reg,option_fields,defaults))
     return files
 
 # ── Python ────────────────────────────────────────────────────────────────────
+
+
+def python_default_expr(ft, raw_val):
+    """Turn a raw sidebar string into a Python default expression."""
+    raw = raw_val.strip()
+    if raw.lower() in ("none", "null"):
+        return "None"
+    if raw.startswith('"') and raw.endswith('"'):
+        return raw
+    if re.match(r'^-?\d+(\.\d+)?$', raw):
+        return raw
+    if raw.lower() in ("true", "false"):
+        return raw.capitalize()
+    if ft in ("str",) or "str" in ft:
+        return f'"{raw}"'
+    return raw
 
 def python_enum(fn, vals):
     cn=to_class_name(fn)
@@ -283,13 +355,14 @@ def python_enum(fn, vals):
         f'            raise ValueError(f"Unknown {cn}: {{value}}. Allowed: {{allowed}}")']
     return {"filename":f"{cn}.py","description":f"Enum · {', '.join(vals)}","code":"\n".join(L)}
 
-def python_dataclass(cn, fields, nested_map, enum_reg, option_fields=None):
+def python_dataclass(cn, fields, nested_map, enum_reg, option_fields=None, defaults=None):
     imports={"from dataclasses import dataclass, field","from typing import Optional, List"}
     for v in enum_reg.values(): imports.add(f"from {v} import {v}")
     for nn in set(nested_map.values()):
         base=nn.replace("List[","").replace("]",""); imports.add(f"from {base} import {base}")
     L=list(sorted(imports))+["","","@dataclass",f"class {cn}:"]
     option_fields = set(option_fields or [])
+    defaults      = defaults or {}
     fd=[]
     for fname,fv in fields.items():
         if fname in nested_map:
@@ -308,31 +381,32 @@ def python_dataclass(cn, fields, nested_map, enum_reg, option_fields=None):
             if fname in option_fields and not ft.startswith("Optional["):
                 ft = f"Optional[{ft}]"
         fd.append((fname,ft,fv))
-        if "List" in ft or "list" in ft: L.append(f"    {fname}: {ft} = field(default_factory=list)")
-        else:                            L.append(f"    {fname}: {ft} = None")
+        if "List" in ft or "list" in ft:
+            L.append(f"    {fname}: {ft} = field(default_factory=list)")
+        elif fname in defaults:
+            dexpr = python_default_expr(ft, defaults[fname])
+            L.append(f"    {fname}: {ft} = {dexpr}")
+        else:
+            L.append(f"    {fname}: {ft} = None")
     L+=["","    @classmethod",f'    def from_dict(cls, data: dict) -> "{cn}":',
         "        return cls("]
     for i,(fname,ft,fv) in enumerate(fd):
         comma="," if i<len(fd)-1 else ""
-        is_opt = ft.startswith("Optional[")
         if fname in enum_reg:
-            ecn = enum_reg[fname]
-            if is_opt:
-                L.append(f'            {fname}={ecn}.from_str(data["{fname}"]) if data.get("{fname}") is not None else None{comma}')
-            else:
-                L.append(f'            {fname}={ecn}.from_str(data["{fname}"]){comma}')
+            L.append(f'            {fname}={enum_reg[fname]}.from_str(data["{fname}"]){comma}')
         elif fname in nested_map:
             raw=nested_map[fname]
             if "List" in raw:
                 inner=raw.replace("List[","").replace("]","")
                 L.append(f'            {fname}=[{inner}.from_dict(i) for i in data.get("{fname}",[])]{comma}')
-            elif is_opt:
-                inner=ft[9:-1]
-                L.append(f'            {fname}={inner}.from_dict(data["{fname}"]) if data.get("{fname}") is not None else None{comma}')
             else:
                 L.append(f'            {fname}={raw}.from_dict(data["{fname}"]){comma}')
         else:
-            L.append(f'            {fname}=data.get("{fname}"){comma}')
+            if fname in defaults:
+                dexpr = python_default_expr(ft, defaults[fname])
+                L.append(f'            {fname}=data.get("{fname}", {dexpr}){comma}')
+            else:
+                L.append(f'            {fname}=data.get("{fname}"){comma}')
     L+=["        )","","    def to_dict(self) -> dict:","        result = {}"]
     for fname,ft,fv in fd:
         if fname in enum_reg:
@@ -345,7 +419,7 @@ def python_dataclass(cn, fields, nested_map, enum_reg, option_fields=None):
     L.append("        return result")
     return {"filename":f"{cn}.py","description":"Dataclass · from_dict/to_dict","code":"\n".join(L)}
 
-def generate_python(raw, root, extra_enums, option_fields=None):
+def generate_python(raw, root, extra_enums, option_fields=None, defaults=None):
     clean, comment_enums = strip_comments(raw)
     data = json.loads(clean)
     all_enums = {**comment_enums, **extra_enums}
@@ -362,7 +436,7 @@ def generate_python(raw, root, extra_enums, option_fields=None):
                 nn=to_class_name(k); nm[k]=f"List[{nn}]"; classes.extend(collect(v[0],nn))
         classes.append((name,obj,nm)); return classes
     for cn,fields,nm in collect(data,root):
-        files.append(python_dataclass(cn,fields,nm,enum_reg,option_fields))
+        files.append(python_dataclass(cn,fields,nm,enum_reg,option_fields,defaults))
     return files
 
 def build_zip(files, root_name):
@@ -424,21 +498,27 @@ if st.session_state["active_tab"] == "generator":
         lang=st.session_state["language"]
         st.markdown("---")
         root_class   = st.text_input("Root class name *", value="",
-                                     placeholder="e.g. InsightsInputRequest  (required)")
+                                     placeholder="e.g. MyRequest  (required)")
         package_name = st.text_input("Package name (optional)", value="",
-                                     placeholder="e.g. com.zoho.feature.forecast") if lang=="Scala" else ""
+                                     placeholder="e.g. com.example.myapp") if lang=="Scala" else ""
         st.markdown("---")
-        st.subheader("🔤 Enum Fields (Optional)")
+        st.subheader("🔤 Enum Fields")
         st.caption("One per line — `fieldName: VAL1,VAL2`")
         enum_raw = st.text_area("Enums", value="",
                                 placeholder="e.g.\ntrigger_type: CREATE,UPDATE,DELETE",
-                                height=110, label_visibility="collapsed")
+                                height=100, label_visibility="collapsed")
         st.markdown("---")
-        st.subheader("🔲 Option Fields (Optional)")
+        st.subheader("🔲 Option Fields")
         st.caption("Field names to mark as optional — one per line")
         option_raw = st.text_area("Options", value="",
                                   placeholder="e.g.\nquota_id\nclient_details",
-                                  height=90, label_visibility="collapsed")
+                                  height=85, label_visibility="collapsed")
+        st.markdown("---")
+        st.subheader("🏷️ Default Values")
+        st.caption("One per line — `fieldName = value`")
+        defaults_raw = st.text_area("Defaults", value="",
+                                    placeholder="e.g.\nstatus = ACTIVE\nretries = 3\nname = \"guest\"",
+                                    height=100, label_visibility="collapsed")
         st.markdown("---")
         db_mode = "☁️ Supabase" if _use_supabase() else "💾 Local SQLite"
         st.caption(f"Storage: {db_mode}")
@@ -457,6 +537,7 @@ if st.session_state["active_tab"] == "generator":
                     vals=[v.strip() for v in vs.split(",") if v.strip()]
                     if fn.strip() and vals: extra_enums[fn.strip()]=vals
             option_fields=[f.strip() for f in option_raw.strip().splitlines() if f.strip()]
+            defaults=parse_defaults(defaults_raw)
             try:
                 cl,_=strip_comments(json_input); json.loads(cl)
             except json.JSONDecodeError as e:
@@ -465,9 +546,9 @@ if st.session_state["active_tab"] == "generator":
                 st.error("❌ Root class name is required."); st.stop()
             try:
                 if lang=="Scala":
-                    files=generate_scala(json_input, root_class.strip(), package_name.strip(), extra_enums, option_fields)
+                    files=generate_scala(json_input, root_class.strip(), package_name.strip(), extra_enums, option_fields, defaults)
                 else:
-                    files=generate_python(json_input, root_class.strip(), extra_enums, option_fields)
+                    files=generate_python(json_input, root_class.strip(), extra_enums, option_fields, defaults)
                 st.session_state["files"]=files
                 st.session_state["json_used"]=json_input
                 log_generate(lang)
@@ -501,7 +582,7 @@ if st.session_state["active_tab"] == "generator":
     with col_fb:
         st.subheader("💬 Feedback")
         fb_cat = st.selectbox("Category",
-                              ["Incorrect output","Missing feature","Option field not detected",
+                              ["Incorrect output","Missing feature","Wrong type inference",
                                "Enum not detected","Other"],
                               label_visibility="collapsed")
         fb_msg = st.text_area("Message",
@@ -616,8 +697,8 @@ elif st.session_state["active_tab"] == "admin":
 st.markdown("---")
 st.markdown("""
     <div style="text-align:center;color:gray;font-size:13px;padding:6px 0">
-        For custom requirements, feature requests or incorrect output — reach out directly:<br>
-        <a href="mailto:dinesh.jr@zohocorp.com" style="color:#4F8BF9;text-decoration:none;">
-            📧 dinesh.jr@zohocorp.com
+        For custom requirements, feature requests or enterprise integrations — reach out directly:<br>
+        <a href="mailto:dineshjayaraman8@gmail.com" style="color:#4F8BF9;text-decoration:none;">
+            📧 dineshjayaraman8@gmail.com
         </a>
     </div>""", unsafe_allow_html=True)
