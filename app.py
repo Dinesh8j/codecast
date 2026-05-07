@@ -502,19 +502,19 @@ if st.session_state["active_tab"] == "generator":
         package_name = st.text_input("Package name (optional)", value="",
                                      placeholder="e.g. com.example.myapp") if lang=="Scala" else ""
         st.markdown("---")
-        st.subheader("🔤 Enum Fields")
+        st.subheader("🔤 Enum Fields (optional)")
         st.caption("One per line — `fieldName: VAL1,VAL2`")
         enum_raw = st.text_area("Enums", value="",
                                 placeholder="e.g.\ntrigger_type: CREATE,UPDATE,DELETE",
                                 height=100, label_visibility="collapsed")
         st.markdown("---")
-        st.subheader("🔲 Option Fields")
+        st.subheader("🔲 Option Fields (optional)")
         st.caption("Field names to mark as optional — one per line")
         option_raw = st.text_area("Options", value="",
                                   placeholder="e.g.\nquota_id\nclient_details",
                                   height=85, label_visibility="collapsed")
         st.markdown("---")
-        st.subheader("🏷️ Default Values")
+        st.subheader("🏷️ Default Values (optional)")
         st.caption("One per line — `fieldName = value`")
         defaults_raw = st.text_area("Defaults", value="",
                                     placeholder="e.g.\nstatus = SCHEDULED\nfeature_name = Insights",
